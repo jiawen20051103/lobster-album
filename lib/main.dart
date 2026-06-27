@@ -124,6 +124,14 @@ class _AlbumHomePageState extends State<AlbumHomePage> {
     }
   }
 
+  Future<void> _openPreview(AssetEntity asset) async {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MediaPreviewPage(asset: asset),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -201,7 +209,10 @@ class _AlbumHomePageState extends State<AlbumHomePage> {
                           ),
                           itemCount: _media.length,
                           itemBuilder: (context, index) {
-                            return _MediaTile(asset: _media[index]);
+                            return _MediaTile(
+                              asset: _media[index],
+                              onTap: () => _openPreview(_media[index]),
+                            );
                           },
                         ),
             ),
@@ -339,51 +350,100 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _MediaTile extends StatelessWidget {
-  const _MediaTile({required this.asset});
+  const _MediaTile({required this.asset, required this.onTap});
+
+  final AssetEntity asset;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            FutureBuilder<Uint8List?>(
+              future: asset.thumbnailDataWithSize(
+                const ThumbnailSize.square(300),
+                quality: 80,
+              ),
+              builder: (context, snapshot) {
+                final bytes = snapshot.data;
+                if (bytes == null) {
+                  return Container(color: Colors.grey.shade300);
+                }
+                return Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                );
+              },
+            ),
+            Positioned(
+              left: 8,
+              top: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Icon(
+                  asset.type == AssetType.video
+                      ? Icons.videocam_rounded
+                      : Icons.image_rounded,
+                  size: 14,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class MediaPreviewPage extends StatelessWidget {
+  const MediaPreviewPage({super.key, required this.asset});
 
   final AssetEntity asset;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          FutureBuilder<Uint8List?>(
-            future: asset.thumbnailDataWithSize(
-              const ThumbnailSize.square(300),
-              quality: 80,
+    return Scaffold(
+      appBar: AppBar(title: const Text('图片预览')),
+      backgroundColor: Colors.black,
+      body: Center(
+        child: FutureBuilder<Uint8List?>(
+          future: asset.thumbnailDataWithSize(
+            ThumbnailSize(
+              MediaQuery.sizeOf(context).width.toInt() * 2,
+              MediaQuery.sizeOf(context).height.toInt() * 2,
             ),
-            builder: (context, snapshot) {
-              final bytes = snapshot.data;
-              if (bytes == null) {
-                return Container(color: Colors.grey.shade300);
-              }
-              return Image.memory(
-                bytes,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
+            quality: 100,
+          ),
+          builder: (context, snapshot) {
+            final bytes = snapshot.data;
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const CircularProgressIndicator();
+            }
+            if (bytes == null) {
+              return const Text(
+                '无法加载预览',
+                style: TextStyle(color: Colors.white),
               );
-            },
-          ),
-          Positioned(
-            left: 8,
-            top: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Icon(
-                asset.type == AssetType.video ? Icons.videocam_rounded : Icons.image_rounded,
-                size: 14,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ],
+            }
+            return InteractiveViewer(
+              minScale: 1,
+              maxScale: 4,
+              child: Image.memory(bytes, fit: BoxFit.contain),
+            );
+          },
+        ),
       ),
     );
   }
