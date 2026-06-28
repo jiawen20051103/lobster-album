@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -124,10 +125,15 @@ class _AlbumHomePageState extends State<AlbumHomePage> {
     }
   }
 
-  Future<void> _openPreview(AssetEntity asset) async {
-    Navigator.of(context).push(
+  Future<void> _openPreview(int index) async {
+    if (_media.isEmpty) return;
+
+    await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => MediaPreviewPage(asset: asset),
+        builder: (_) => MediaPreviewPage(
+          media: _media,
+          initialIndex: index,
+        ),
       ),
     );
   }
@@ -211,7 +217,7 @@ class _AlbumHomePageState extends State<AlbumHomePage> {
                           itemBuilder: (context, index) {
                             return _MediaTile(
                               asset: _media[index],
-                              onTap: () => _openPreview(_media[index]),
+                              onTap: () => _openPreview(index),
                             );
                           },
                         ),
@@ -407,42 +413,174 @@ class _MediaTile extends StatelessWidget {
   }
 }
 
-class MediaPreviewPage extends StatelessWidget {
-  const MediaPreviewPage({super.key, required this.asset});
+class MediaPreviewPage extends StatefulWidget {
+  const MediaPreviewPage({super.key, required this.media, required this.initialIndex});
 
-  final AssetEntity asset;
+  final List<AssetEntity> media;
+  final int initialIndex;
+
+  @override
+  State<MediaPreviewPage> createState() => _MediaPreviewPageState();
+}
+
+class _MediaPreviewPageState extends State<MediaPreviewPage> {
+  late final PageController _pageController;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<Uint8List?> _loadPreviewBytes(BuildContext context, AssetEntity asset) {
+    final size = MediaQuery.sizeOf(context);
+    final targetWidth = (size.width * 2).toInt();
+    final targetHeight = (size.height * 2).toInt();
+    return asset.thumbnailDataWithSize(
+      ThumbnailSize(targetWidth, targetHeight),
+      quality: 100,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('图片预览')),
       backgroundColor: Colors.black,
-      body: Center(
-        child: FutureBuilder<Uint8List?>(
-          future: asset.thumbnailDataWithSize(
-            ThumbnailSize(
-              MediaQuery.sizeOf(context).width.toInt() * 2,
-              MediaQuery.sizeOf(context).height.toInt() * 2,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _pageController,
+              itemCount: widget.media.length,
+              onPageChanged: (index) {
+                setState(() {
+                  _currentIndex = index;
+                });
+              },
+              itemBuilder: (context, index) {
+                final asset = widget.media[index];
+                return Center(
+                  child: FutureBuilder<Uint8List?>(
+                    future: _loadPreviewBytes(context, asset),
+                    builder: (context, snapshot) {
+                      final bytes = snapshot.data;
+                      if (snapshot.connectionState != ConnectionState.done) {
+                        return const CircularProgressIndicator();
+                      }
+                      if (bytes == null) {
+                        return const Text(
+                          '无法加载预览',
+                          style: TextStyle(color: Colors.white),
+                        );
+                      }
+                      return PhotoPreviewPane(imageBytes: bytes);
+                    },
+                  ),
+                );
+              },
             ),
-            quality: 100,
+            Positioned(
+              left: 12,
+              right: 12,
+              top: 8,
+              child: Row(
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded, color: Colors.white),
+                    ),
+                  ),
+                  const Spacer(),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      child: Text(
+                        '${_currentIndex + 1} / ${widget.media.length}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class PhotoPreviewPane extends StatefulWidget {
+  const PhotoPreviewPane({super.key, required this.imageBytes});
+
+  final Uint8List imageBytes;
+
+  @override
+  State<PhotoPreviewPane> createState() => _PhotoPreviewPaneState();
+}
+
+class _PhotoPreviewPaneState extends State<PhotoPreviewPane> {
+  TransformationController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TransformationController();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _resetScale() {
+    _controller?.value = Matrix4.identity();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.sizeOf(context);
+
+    return GestureDetector(
+      onDoubleTap: _resetScale,
+      child: SizedBox.expand(
+        child: InteractiveViewer(
+          transformationController: _controller,
+          minScale: 1,
+          maxScale: 4,
+          panEnabled: true,
+          clipBehavior: Clip.none,
+          boundaryMargin: EdgeInsets.zero,
+          constrained: false,
+          child: Center(
+            child: SizedBox(
+              width: screen.width,
+              height: screen.height,
+              child: Image.memory(
+                widget.imageBytes,
+                fit: BoxFit.contain,
+                alignment: Alignment.center,
+              ),
+            ),
           ),
-          builder: (context, snapshot) {
-            final bytes = snapshot.data;
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const CircularProgressIndicator();
-            }
-            if (bytes == null) {
-              return const Text(
-                '无法加载预览',
-                style: TextStyle(color: Colors.white),
-              );
-            }
-            return InteractiveViewer(
-              minScale: 1,
-              maxScale: 4,
-              child: Image.memory(bytes, fit: BoxFit.contain),
-            );
-          },
         ),
       ),
     );
