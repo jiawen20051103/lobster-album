@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -40,6 +39,7 @@ class _AlbumHomePageState extends State<AlbumHomePage> {
   List<AssetPathEntity> _albums = [];
   List<AssetEntity> _media = [];
   String _currentAlbumName = '全部媒体';
+  int _previewIndex = 0;
 
   @override
   void initState() {
@@ -127,15 +127,58 @@ class _AlbumHomePageState extends State<AlbumHomePage> {
 
   Future<void> _openPreview(int index) async {
     if (_media.isEmpty) return;
-
-    await Navigator.of(context).push(
+    _previewIndex = index;
+    final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => MediaPreviewPage(
           media: _media,
           initialIndex: index,
+          onDelete: _deleteAsset,
         ),
       ),
     );
+
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('删除成功，已移到回收站')),
+      );
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
+  }
+
+  Future<bool> _deleteAsset(AssetEntity asset) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除到回收站'),
+        content: const Text('确定要把这张照片/视频删除到系统回收站吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete != true) return false;
+
+    final deletedIds = await PhotoManager.editor.deleteWithIds([asset.id]);
+    if (!mounted) return false;
+
+    final success = deletedIds.contains(asset.id);
+    setState(() {
+      _media.removeWhere((item) => deletedIds.contains(item.id));
+      _statusText = success
+          ? '删除成功，已移到回收站'
+          : '删除失败或系统未允许删除';
+      _previewIndex = _previewIndex.clamp(0, _media.isEmpty ? 0 : _media.length - 1);
+    });
+    return success;
   }
 
   @override
@@ -414,10 +457,11 @@ class _MediaTile extends StatelessWidget {
 }
 
 class MediaPreviewPage extends StatefulWidget {
-  const MediaPreviewPage({super.key, required this.media, required this.initialIndex});
+  const MediaPreviewPage({super.key, required this.media, required this.initialIndex, required this.onDelete});
 
   final List<AssetEntity> media;
   final int initialIndex;
+  final Future<bool> Function(AssetEntity asset) onDelete;
 
   @override
   State<MediaPreviewPage> createState() => _MediaPreviewPageState();
@@ -440,148 +484,83 @@ class _MediaPreviewPageState extends State<MediaPreviewPage> {
     super.dispose();
   }
 
-  Future<Uint8List?> _loadPreviewBytes(BuildContext context, AssetEntity asset) {
-    final size = MediaQuery.sizeOf(context);
-    final targetWidth = (size.width * 2).toInt();
-    final targetHeight = (size.height * 2).toInt();
-    return asset.thumbnailDataWithSize(
-      ThumbnailSize(targetWidth, targetHeight),
-      quality: 100,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
+    final currentAsset = widget.media[_currentIndex];
+
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            PageView.builder(
-              controller: _pageController,
-              itemCount: widget.media.length,
-              onPageChanged: (index) {
-                setState(() {
-                  _currentIndex = index;
-                });
-              },
-              itemBuilder: (context, index) {
-                final asset = widget.media[index];
-                return Center(
-                  child: FutureBuilder<Uint8List?>(
-                    future: _loadPreviewBytes(context, asset),
-                    builder: (context, snapshot) {
-                      final bytes = snapshot.data;
-                      if (snapshot.connectionState != ConnectionState.done) {
-                        return const CircularProgressIndicator();
-                      }
-                      if (bytes == null) {
-                        return const Text(
-                          '无法加载预览',
-                          style: TextStyle(color: Colors.white),
-                        );
-                      }
-                      return PhotoPreviewPane(imageBytes: bytes);
-                    },
-                  ),
-                );
-              },
-            ),
-            Positioned(
-              left: 12,
-              right: 12,
-              top: 8,
-              child: Row(
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded, color: Colors.white),
-                    ),
-                  ),
-                  const Spacer(),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      child: Text(
-                        '${_currentIndex + 1} / ${widget.media.length}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class PhotoPreviewPane extends StatefulWidget {
-  const PhotoPreviewPane({super.key, required this.imageBytes});
-
-  final Uint8List imageBytes;
-
-  @override
-  State<PhotoPreviewPane> createState() => _PhotoPreviewPaneState();
-}
-
-class _PhotoPreviewPaneState extends State<PhotoPreviewPane> {
-  TransformationController? _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TransformationController();
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  void _resetScale() {
-    _controller?.value = Matrix4.identity();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screen = MediaQuery.sizeOf(context);
-
-    return GestureDetector(
-      onDoubleTap: _resetScale,
-      child: SizedBox.expand(
-        child: InteractiveViewer(
-          transformationController: _controller,
-          minScale: 1,
-          maxScale: 4,
-          panEnabled: true,
-          clipBehavior: Clip.none,
-          boundaryMargin: EdgeInsets.zero,
-          constrained: false,
-          child: Center(
-            child: SizedBox(
-              width: screen.width,
-              height: screen.height,
-              child: Image.memory(
-                widget.imageBytes,
-                fit: BoxFit.contain,
-                alignment: Alignment.center,
-              ),
-            ),
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text('${_currentIndex + 1} / ${widget.media.length}'),
+        actions: [
+          IconButton(
+            onPressed: () async {
+              final deleted = await widget.onDelete(currentAsset);
+              if (!mounted) return;
+              if (deleted) {
+                Navigator.of(context).pop(true);
+              }
+            },
+            icon: const Icon(Icons.delete_outline),
           ),
-        ),
+        ],
+      ),
+      body: PageView.builder(
+        controller: _pageController,
+        itemCount: widget.media.length,
+        onPageChanged: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        itemBuilder: (context, index) {
+          final asset = widget.media[index];
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              return Center(
+                child: FutureBuilder<Uint8List?>(
+                  future: asset.thumbnailDataWithSize(
+                    ThumbnailSize(
+                      constraints.maxWidth.toInt() * 2,
+                      constraints.maxHeight.toInt() * 2,
+                    ),
+                    quality: 100,
+                  ),
+                  builder: (context, snapshot) {
+                    final bytes = snapshot.data;
+                    if (snapshot.connectionState != ConnectionState.done) {
+                      return const CircularProgressIndicator();
+                    }
+                    if (bytes == null) {
+                      return const Text(
+                        '无法加载预览',
+                        style: TextStyle(color: Colors.white),
+                      );
+                    }
+                    return GestureDetector(
+                      onDoubleTap: () {},
+                      child: InteractiveViewer(
+                        clipBehavior: Clip.none,
+                        boundaryMargin: const EdgeInsets.all(200),
+                        minScale: 0.8,
+                        maxScale: 5,
+                        panEnabled: true,
+                        child: Image.memory(
+                          bytes,
+                          fit: BoxFit.contain,
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
